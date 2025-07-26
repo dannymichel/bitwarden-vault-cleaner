@@ -179,7 +179,7 @@ for item in items_copy:
       item['login']['uris'] = corrected_uris
       base_domains = [get_base_domain(uri) for uri in uri_keys]
       norm_username = normalize_username(username)
-      item_key = f"{norm_username}_{password}_{'|'.join(sorted(base_domains))}"
+      item_key = f"{norm_username}_{password}_{'|'.join(sorted(set(base_domains)))}"
 
       existing_item = duplicates.get(item_key)
 
@@ -188,26 +188,20 @@ for item in items_copy:
           existing_score = item_score(existing_item)
 
           if current_score > existing_score:
-              # Keep current item, delete previous one
               print(f"> Replacing lower-score item '{existing_item['name']}' with richer item '{item_name}'")
               reason_for_deletion = f"Replaced poorer duplicate: {existing_item['name']}"
-              deleted_items.append({**existing_item, "reasonForDeletion": "Replaced by richer item"})
+              deleted_items.append({**existing_item, "reasonForDeletion": reason_for_deletion})
               if existing_item in data['items']:
                   data['items'].remove(existing_item)
-              # Update stored item
-              duplicates[item_key] = item
+              duplicates[item_key] = item  # Keep the better item
           else:
               reason_for_deletion = f"Duplicate of {existing_item['name']}"
               deleted_items.append({**item, "reasonForDeletion": reason_for_deletion})
-              data['items'].remove(item)
+              if item in data['items']:
+                  data['items'].remove(item)
       else:
           duplicates[item_key] = item
 
-
-    if reason_for_deletion and item in data['items']:
-        print(f"> Removing item: {item_name} due to {reason_for_deletion}")
-        deleted_items.append({**item, "reasonForDeletion": reason_for_deletion})
-        data['items'].remove(item)
 
     # Save the data and deleted items in real-time
     with open(output_file_name, 'w') as output_file:
