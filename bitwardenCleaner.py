@@ -1,8 +1,25 @@
+ENABLE_USERNAME_NORMALIZATION = True
 from urllib.parse import urlsplit, urlunsplit  # Import the urlparse, urlsplit, and urlunsplit functions
 import json
 import re
 import ping3
 import requests
+import tldextract
+def normalize_username(username):
+    if username is None:
+        return ""
+    username = username.strip().lower()
+    return username.split("@")[0] if ENABLE_USERNAME_NORMALIZATION else username
+
+def get_base_domain(uri):
+    try:
+        netloc = urlsplit(uri).netloc
+        ext = tldextract.extract(netloc)
+        if ext.domain and ext.suffix:
+            return f"{ext.domain}.{ext.suffix}"
+        return netloc  # fallback
+    except Exception:
+        return uri  # fallback
 
 # Constants for file names
 input_file_name = "bitwarden_export_file.json" # Replace this with your export file from Bitwarden
@@ -78,6 +95,21 @@ def get_valid_url(uri):
     print(f"> Skipping unreachable URL for: {tld}")
     return None
 
+def item_score(item):
+    login = item.get("login", {})
+    score = 0
+    if login.get("totp"):
+        score += 10
+    if login.get("password"):
+        score += 1
+    if login.get("username"):
+        score += 1
+    if item.get("notes"):
+        score += 1
+    if item.get("fields"):
+        score += len(item.get("fields"))
+    return score
+
 def get_tld(netloc):
     match = re.search(tld_pattern, netloc)
     if match:
@@ -145,16 +177,37 @@ for item in items_copy:
         reason_for_deletion =  "all URIs are invalid"
     else:
       item['login']['uris'] = corrected_uris
-      item_key = f"{username}_{password}_{'|'.join(sorted(uri_keys))}"
-      if item_key in duplicates:
-          reason_for_deletion = f"Duplicate of {duplicates[item_key]}"
-      else:
-          duplicates[item_key] = item_name
+      base_domains = [get_base_domain(uri) for uri in uri_keys]
+      norm_username = normalize_username(username)
+      item_key = f"{norm_username}_{password}_{'|'.join(sorted(base_domains))}"
 
-    if (reason_for_deletion):
-      print(f"> Removing item: {item_name} due to {reason_for_deletion}")
-      deleted_items.append({**item, "reasonForDeletion": reason_for_deletion})
-      data['items'].remove(item)
+      existing_item = duplicates.get(item_key)
+
+      if existing_item:
+          current_score = item_score(item)
+          existing_score = item_score(existing_item)
+
+          if current_score > existing_score:
+              # Keep current item, delete previous one
+              print(f"> Replacing lower-score item '{existing_item['name']}' with richer item '{item_name}'")
+              reason_for_deletion = f"Replaced poorer duplicate: {existing_item['name']}"
+              deleted_items.append({**existing_item, "reasonForDeletion": "Replaced by richer item"})
+              if existing_item in data['items']:
+                  data['items'].remove(existing_item)
+              # Update stored item
+              duplicates[item_key] = item
+          else:
+              reason_for_deletion = f"Duplicate of {existing_item['name']}"
+              deleted_items.append({**item, "reasonForDeletion": reason_for_deletion})
+              data['items'].remove(item)
+      else:
+          duplicates[item_key] = item
+
+
+    if reason_for_deletion and item in data['items']:
+        print(f"> Removing item: {item_name} due to {reason_for_deletion}")
+        deleted_items.append({**item, "reasonForDeletion": reason_for_deletion})
+        data['items'].remove(item)
 
     # Save the data and deleted items in real-time
     with open(output_file_name, 'w') as output_file:
